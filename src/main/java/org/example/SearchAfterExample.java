@@ -1,65 +1,85 @@
 package org.example;
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.FieldSort;
+import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.json.jackson.JacksonJsonpMapper;
+import co.elastic.clients.transport.ElasticsearchTransport;
+import co.elastic.clients.transport.rest_client.RestClientTransport;
 import org.apache.http.HttpHost;
-import org.elasticsearch.action.search.SearchRequest;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.RestHighLevelClient;
-import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.sort.SortOrder;
 
 import java.io.IOException;
+import java.util.List;
 
 public class SearchAfterExample {
+    static String serverUrl = "http://localhost:9200";
+    static String indexName = "article";
+    static String fieldSearch = "title";
+    static String searchText = "Getting Started";
+
     public static void main(String[] args) throws IOException, InterruptedException {
-        RestHighLevelClient client = new RestHighLevelClient(
-                RestClient.builder(
-                        new HttpHost("localhost", 9200),
-                        new HttpHost("localhost", 9201)
-                )
+        RestClient httpClient = RestClient.builder(HttpHost.create(serverUrl)).build();
+
+        ElasticsearchTransport transport = new RestClientTransport(
+                httpClient,
+                new JacksonJsonpMapper()
         );
 
-        SearchRequest searchRequest = new SearchRequest("article");
-        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
-        searchSourceBuilder.query(QueryBuilders.matchQuery("title", "Getting Started"));
-        searchSourceBuilder.sort("title.keyword", SortOrder.ASC);
-        searchRequest.source(searchSourceBuilder);
-        SearchResponse searchResponse = client.search(searchRequest, RequestOptions.DEFAULT);
-        SearchHit[] searchHits = searchResponse.getHits().getHits();
+        ElasticsearchClient esClient = new ElasticsearchClient(transport);
 
-        System.out.println(searchHits.length);
-        for (SearchHit hit : searchHits) {
-            System.out.println(hit.getSourceAsString());
-        }
-        System.out.println();
+        SearchResponse<Article> response = esClient.search(s -> s
+                        .index(indexName)
+                        .query(q -> q
+                                .match(m -> m
+                                        .field(fieldSearch)
+                                        .query(searchText)
+                                )
+                        ).sort(so -> so
+                                .field(FieldSort.of(f -> f
+                                        .field("title.keyword")
+                                        .order(SortOrder.Asc))))
+                        .size(3)
+                ,
+                Article.class
+        );
 
-        Object[] sortValues;
-        if (searchHits.length > 0) {
-            sortValues = searchHits[searchHits.length - 1].getSortValues();
-        } else {
-            sortValues = new Object[]{};
-        }
-        for (Object sortValue : sortValues) {
-            System.out.println(sortValue);
+        List<Hit<Article>> hits = response.hits().hits();
+        for (Hit<Article> hit : hits) {
+            Article article = hit.source();
+            assert article != null;
+            System.out.println("Found article: " + article.getTitle() + " - " + article.getContent());
         }
 
         Thread.sleep(10000);
-        searchSourceBuilder.searchAfter(sortValues);
-        searchRequest.source(searchSourceBuilder);
-        searchResponse = client.search(searchRequest, RequestOptions.DEFAULT);
-        searchHits = searchResponse.getHits().getHits();
-        if (searchHits.length > 0) {
-            sortValues = searchHits[searchHits.length - 1].getSortValues();
-        } else {
-            sortValues = new Object[]{};
-        }
-        for (Object sortValue : sortValues) {
-            System.out.println(sortValue);
+
+        final List<Hit<Article>> finalHits = hits;
+        response = esClient.search(s -> s
+                        .index(indexName)
+                        .query(q -> q
+                                .match(m -> m
+                                        .field(fieldSearch)
+                                        .query(searchText)
+                                )
+                        ).sort(so -> so
+                                .field(FieldSort.of(f -> f
+                                        .field("title.keyword")
+                                        .order(SortOrder.Asc))))
+                        .size(3)
+                        .searchAfter(finalHits.get(2).sort())
+                ,
+                Article.class
+        );
+
+        hits = response.hits().hits();
+        for (Hit<Article> hit : hits) {
+            Article article = hit.source();
+            assert article != null;
+            System.out.println("Found article: " + article.getTitle() + " - " + article.getContent());
         }
 
-        client.close();
+        httpClient.close();
     }
 }

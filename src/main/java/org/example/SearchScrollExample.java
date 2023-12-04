@@ -1,60 +1,65 @@
 package org.example;
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.elasticsearch.core.search.TotalHits;
+import co.elastic.clients.elasticsearch.core.search.TotalHitsRelation;
+import co.elastic.clients.json.jackson.JacksonJsonpMapper;
+import co.elastic.clients.transport.ElasticsearchTransport;
+import co.elastic.clients.transport.rest_client.RestClientTransport;
 import org.apache.http.HttpHost;
-import org.elasticsearch.action.search.*;
-import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.RestHighLevelClient;
-import org.elasticsearch.core.TimeValue;
-import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.search.Scroll;
-import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
 
 import java.io.IOException;
+import java.util.List;
 
 public class SearchScrollExample {
+
+    static String serverUrl = "http://localhost:9200";
+    static String indexName = "article";
+
+    static String fieldSearch = "title";
+    static String searchText = "Getting Started";
+
     public static void main(String[] args) throws IOException {
-        RestHighLevelClient client = new RestHighLevelClient(
-                RestClient.builder(
-                        new HttpHost("localhost", 9200),
-                        new HttpHost("localhost", 9201)
-                )
+        RestClient restClient = RestClient.builder(HttpHost.create(serverUrl)).build();
+
+        ElasticsearchTransport transport = new RestClientTransport(
+                restClient,
+                new JacksonJsonpMapper()
         );
 
-        final Scroll scroll = new Scroll(TimeValue.timeValueMinutes(1L));
-        SearchRequest searchRequest = new SearchRequest("article");
-        searchRequest.scroll(scroll);
-        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
-        searchSourceBuilder.query(QueryBuilders.matchQuery("title", "Getting Started"));
-        searchRequest.source(searchSourceBuilder);
+        ElasticsearchClient esClient = new ElasticsearchClient(transport);
 
-        SearchResponse searchResponse = client.search(searchRequest, RequestOptions.DEFAULT);
-        String scrollId = searchResponse.getScrollId();
-        SearchHit[] searchHits = searchResponse.getHits().getHits();
+        SearchResponse<Article> response = esClient.search(s -> s
+                        .index(indexName)
+                        .query(q -> q
+                                .match(m -> m
+                                        .field(fieldSearch)
+                                        .query(searchText)
+                                )
+                        ).size(10).from(0)
+                ,
+                Article.class
+        );
 
-        while (searchHits != null && searchHits.length > 0) {
-            for (SearchHit hit : searchHits) {
-                System.out.println(hit.getSourceAsString());
-            }
-
-            SearchScrollRequest scrollRequest = new SearchScrollRequest(scrollId);
-            scrollRequest.scroll(scroll);
-            searchResponse = client.scroll(scrollRequest, RequestOptions.DEFAULT);
-            scrollId = searchResponse.getScrollId();
-            searchHits = searchResponse.getHits().getHits();
-        }
-
-        ClearScrollRequest clearScrollRequest = new ClearScrollRequest();
-        clearScrollRequest.addScrollId(scrollId);
-        ClearScrollResponse clearScrollResponse = client.clearScroll(clearScrollRequest,
-                RequestOptions.DEFAULT);
-        boolean succeeded = clearScrollResponse.isSucceeded();
-        if (succeeded) {
-            System.out.println("Clear scroll succeeded");
+        TotalHits totalHits = response.hits().total();
+        assert totalHits != null;
+        boolean isExactResult = totalHits.relation() == TotalHitsRelation.Eq;
+        if(isExactResult){
+            System.out.println("There are " + totalHits.value() + " results");
         } else {
-            System.out.println("Clear scroll failed");
+            System.out.println("There are more than " + totalHits.value() + " results");
         }
-        client.close();
+
+        List<Hit<Article>> hits = response.hits().hits();
+        for(Hit<Article> hit : hits){
+            Article article = hit.source();
+            assert article != null;
+            System.out.println("Found article: " + article.getTitle() + " - " + article.getContent());
+        }
+
+        restClient.close();
     }
 }
